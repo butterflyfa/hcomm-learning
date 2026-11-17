@@ -1,6 +1,6 @@
 #include "coll_comm.h"
 
-bool InitComm(const CommConfig& config, Collcomm& comm){
+bool InitComm(const CommConfig& config, CollComm& comm){
     if(comm.ready){
         return false;
     }
@@ -18,3 +18,9 @@ bool InitComm(const CommConfig& config, Collcomm& comm){
     comm.ready = true;
     return true;
 };
+
+bool CollComm::GetAsyncConfig(bool& enabled, std::size_t& capacity) const {
+    enabled = config.asyncSubmitEnabled;
+    capacity = config.queueCapacity;
+    return true;
+}
