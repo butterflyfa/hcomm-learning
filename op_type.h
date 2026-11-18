@@ -12,6 +12,14 @@ enum class ReduceOp {
     MAX
 };
 
+enum class ProgressResult {
+    WAITING,
+    COMPLETED,
+    ERROR,
+    RETRYABLE_ERROR,  // 本次执行遇到临时故障，可以再次尝试
+};
+
+
 struct AllReduceParams {
     const int* input;
     int* output;
