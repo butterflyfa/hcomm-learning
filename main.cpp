@@ -50,27 +50,42 @@ bool TryConfirmNext(CollComm& comm){ // 收到完成通知后，回收已展开�
     }
 }
 
-bool ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduceParams& rank1){
+ProgressResult ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduceParams& rank1, std::size_t& next0 , std::size_t next1, FaultPoint& faultPoint){
     if (rank0.count != rank1.count ||
     rank0.reduceOp != ReduceOp::SUM ||
     rank1.reduceOp != ReduceOp::SUM) {
-    return false;
+    return ProgressResult::ERROR;
 }
 
     if (rank0.count > 0 &&
     (!rank0.input || !rank1.input || !rank0.output || !rank1.output)) {
-    return false;
+    return ProgressResult::ERROR;
 }
+
+    if(faultPoint == FaultPoint::BEFORE_EXECUTE){
+        faultPoint = FaultPoint::NONE;
+        return ProgressResult::RETRYABLE_ERROR;
+    }
+    // 如果说是在执行之前就报错，那就返回一个重执行的信号
+
     //TODO: cuda做并行运算，用gpu并行计算各元素的和
     for(std::size_t i =0; i<rank0.count;i++){
         int sum = rank0.input[i] + rank1.input[i];
         rank0.output[i] = sum;
         rank1.output[i] = sum;
+
+        next0 = i + 1;
+        next1 = i + 1;
+
+        if(faultPoint == FaultPoint::AFTER_FIRST_ELEMENT && i == 0 && next0 < rank0.count){
+            faultPoint = FaultPoint::NONE;
+            return ProgressResult::RETRYABLE_ERROR;
+        }
     }
-    return true;
+    return ProgressResult::COMPLETED;
 }
 
-ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, bool& failOnce){
+ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, FaultPoint& failOnce){
 
     if (!rank0.ready || !rank1.ready || // 是否已经初始化
     rank0.config.group != rank1.config.group || // 是否属于同一个通信域
@@ -106,13 +121,12 @@ ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, bool& failO
         return ProgressResult::ERROR;
     }
 
-    if(failOnce == true){
-        failOnce = false; // 表示故障已触发
+    if(failOnce == FaultPoint::AFTER_FIRST_ELEMENT || failOnce == FaultPoint::BEFORE_EXECUTE){
+        failOnce = FaultPoint::NONE; // 表示故障已触发
         return ProgressResult::RETRYABLE_ERROR;
     }
-    // 在执行算子之前，如果出现故障了，那就先将标志位置为false，等待下一轮的执行
 
-    if(!ExecuteAllReduceSum(*op0.allReduceParams, *op1.allReduceParams)){
+    if(!ExecuteAllReduceSum(*op0.allReduceParams, *op1.allReduceParams, failOnce)){
         return ProgressResult::ERROR;
     }
 
