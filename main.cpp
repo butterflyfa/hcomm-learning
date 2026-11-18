@@ -50,7 +50,11 @@ bool TryConfirmNext(CollComm& comm){ // 收到完成通知后，回收已展开�
     }
 }
 
-ProgressResult ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduceParams& rank1, std::size_t& next0 , std::size_t next1, FaultPoint& faultPoint){
+ProgressResult ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduceParams& rank1, std::size_t& next0 , std::size_t& next1, FaultPoint& faultPoint){
+    if (next0 != next1 || next0 > rank0.count) {
+    return ProgressResult::ERROR;
+}
+    
     if (rank0.count != rank1.count ||
     rank0.reduceOp != ReduceOp::SUM ||
     rank1.reduceOp != ReduceOp::SUM) {
@@ -69,7 +73,7 @@ ProgressResult ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduce
     // 如果说是在执行之前就报错，那就返回一个重执行的信号
 
     //TODO: cuda做并行运算，用gpu并行计算各元素的和
-    for(std::size_t i =0; i<rank0.count;i++){
+    for(std::size_t i = next0; i<rank0.count;i++){ // 打上检查点，如果重执行了，就会记得已经完成过哪些计算了
         int sum = rank0.input[i] + rank1.input[i];
         rank0.output[i] = sum;
         rank1.output[i] = sum;
@@ -77,7 +81,7 @@ ProgressResult ExecuteAllReduceSum(const AllReduceParams& rank0, const AllReduce
         next0 = i + 1;
         next1 = i + 1;
 
-        if(faultPoint == FaultPoint::AFTER_FIRST_ELEMENT && i == 0 && next0 < rank0.count){
+        if(faultPoint == FaultPoint::AFTER_FIRST_ELEMENT && i == 0 && next0 < rank0.count){ // 如果报错发生在第一个元素计算之后，并且后续还存在有需要计算的元素
             faultPoint = FaultPoint::NONE;
             return ProgressResult::RETRYABLE_ERROR;
         }
@@ -91,7 +95,7 @@ ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, FaultPoint&
     rank0.config.group != rank1.config.group || // 是否属于同一个通信域
     rank0.config.rankSize != 2 || rank1.config.rankSize != 2 || // 是否只允许两个设备进行通信)
     rank0.config.myRank != 0 || rank1.config.myRank != 1) // 是否传的是同一张卡
-        {
+    {
     return ProgressResult::ERROR;
     }
 
@@ -105,8 +109,8 @@ ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, FaultPoint&
         return ProgressResult::ERROR;
     }
 
-    const auto& op0 = rank0.opQueue.front();
-    const auto& op1 = rank1.opQueue.front();
+    auto& op0 = rank0.opQueue.front();
+    auto& op1 = rank1.opQueue.front();
 
     if (!op0.allReduceParams || !op1.allReduceParams ||
     op0.type != OpType::ALLREDUCE ||
@@ -121,13 +125,12 @@ ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, FaultPoint&
         return ProgressResult::ERROR;
     }
 
-    if(failOnce == FaultPoint::AFTER_FIRST_ELEMENT || failOnce == FaultPoint::BEFORE_EXECUTE){
-        failOnce = FaultPoint::NONE; // 表示故障已触发
-        return ProgressResult::RETRYABLE_ERROR;
-    }
+    const auto result = ExecuteAllReduceSum(
+        *op0.allReduceParams, *op1.allReduceParams,
+        op0.nextElement, op1.nextElement, failOnce);
 
-    if(!ExecuteAllReduceSum(*op0.allReduceParams, *op1.allReduceParams, failOnce)){
-        return ProgressResult::ERROR;
+    if (result != ProgressResult::COMPLETED) {
+        return result;
     }
 
         // 求和成功后，回收两条记录
@@ -139,20 +142,50 @@ ProgressResult TryRunNextAllReduce(CollComm& rank0, CollComm& rank1, FaultPoint&
     }
 
     return ProgressResult::ERROR;
+}
+
+ProgressResult RunAllReduceWithOneRetry(CollComm& rank0,CollComm& rank1, FaultPoint& faultpoint){
+    ProgressResult result = TryRunNextAllReduce(rank0, rank1, faultpoint);
+    if(result == ProgressResult::RETRYABLE_ERROR){
+        result = TryRunNextAllReduce(rank0, rank1, faultpoint);
+        return result;
+    }
+    else{
+        return result;
+    }
+}
+
+bool ExecuteReduceScatterSum(const AllReduceParams& rank0, const AllReduceParams& rank1){
+    
+    if (rank0.count != rank1.count ||
+    rank0.reduceOp != ReduceOp::SUM ||
+    rank1.reduceOp != ReduceOp::SUM ||
+    rank0.count % 2 != 0) {
+    return false;
+}
+
+    if (rank0.count > 0 &&
+    (!rank0.input || !rank1.input || !rank0.output || !rank1.output)) {
+    return false;
+}
+
+    std::size_t half = rank0.count / 2;
+    for(std::size_t i =0;i<half;i++){
+        int pre_sum = rank0.input[i] + rank1.input[i];
+        rank0.output[i] = pre_sum;
+
+        int last_sum = rank0.input[half +i] + rank1.input[half+i];
+        rank1.output[i] = last_sum;
+    }
+    return true;
+
+}
+
+bool ExecuteAllGather(const int* part0, const int* part1,std::size_t partCount, int* output0, int* output1){
     
 }
 
-
 int main() {
-    CollComm rank0{};
-
-    if (!InitComm({"groupA", 0, 2, 2}, rank0)) {
-        std::cerr << "初始化失败\n";
-        return 1;
-    }
-
-    std::cout << rank0.config.group << " rank=" << rank0.config.myRank
-            << " ready=" << std::boolalpha << rank0.ready << '\n';
 
     return 0;
 }

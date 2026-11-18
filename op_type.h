@@ -19,6 +19,11 @@ enum class ProgressResult {
     RETRYABLE_ERROR,  // 本次执行遇到临时故障，可以再次尝试
 };
 
+enum class FaultPoint { // 查看故障所在的位置
+    NONE,                 // 正常执行
+    BEFORE_EXECUTE,       // 开始求和之前失败
+    AFTER_FIRST_ELEMENT   // 第一个元素的和写入两边后失败
+};
 
 struct AllReduceParams {
     const int* input;
